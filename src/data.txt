@@ -1,0 +1,241 @@
+PSS ID Number: Q118626
+-------------------------------------------------------------------------
+The information in this article applies to:
+
+ - Microsoft Win32 Application Programming Interface (API) included with:
+
+    - Microsoft Windows NT versions 3.1 and 3.5
+-------------------------------------------------------------------------
+
+To determine whether or not a user is an administrator, you need to examine
+the user's access token with GetTokenInformation(). The access token
+
+represents the user's privileges and the groups to which the user belongs.
+
+When a user starts an application, the access token associated with that
+process is the user's access token. To get the process token (and therefore
+the user's token), use OpenProcessToken().
+
+The sample code below uses the APIs mentioned in the previous paragraph to
+test whether or not the current user is an administrator on the local
+machine:
+
+Sample code
+-----------
+
+   /* BOOL IsAdmin(void)
+
+      returns TRUE if user is an admin
+              FALSE if user is not an admin
+   */
+
+   BOOL IsAdmin(void)
+   {
+      HANDLE hAccessToken;
+      UCHAR InfoBuffer[1024];
+      PTOKEN_GROUPS ptgGroups = (PTOKEN_GROUPS)InfoBuffer;
+      DWORD dwInfoBufferSize;
+      PSID psidAdministrators;
+      SID_IDENTIFIER_AUTHORITY siaNtAuthority = SECURITY_NT_AUTHORITY;
+      UINT x;
+      BOOL bSuccess;
+
+      if(!OpenProcessToken(GetCurrentProcess(),TOKEN_READ,&hAccessToken))
+
+         return(FALSE);
+
+      bSuccess = GetTokenInformation(hAccessToken,TokenGroups,InfoBuffer,
+         1024, &dwInfoBufferSize);
+
+      CloseHandle(hAccessToken);
+
+      if( !bSucess )
+         return FALSE;
+
+      if(!AllocateAndInitializeSid(&siaNtAuthority, 2,
+         SECURITY_BUILTIN_DOMAIN_RID,
+         DOMAIN_ALIAS_RID_ADMINS,
+         0, 0, 0, 0, 0, 0,
+         &psidAdministrators))
+         return FALSE;
+
+   // assume that we don't find the admin SID.
+
+      bSuccess = FALSE;
+
+      for(x=0;x<ptgGroups->GroupCount;x++)
+      {
+         if( EqualSid(psidAdministrators, ptgGroups->Groups[x].Sid) )
+         {
+            bSuccess = TRUE;
+            break;
+         }
+
+      }
+      FreeSid(psidAdministrators);
+      return bSuccess;
+   }
+
+Additional reference words: 3.10 3.50
+KBCategory: kbprg
+KBSubcategory: BseSecurity
+
+/**************/
+
+WaitForSingleObject()
+PSS ID Number: Q125689
+-------------------------------------------------------------------------
+The information in this article applies to:
+
+ - Microsoft Win32 Application Programming Interface (API) included with:
+
+    - Microsoft Windows NT version 3.51
+    - Microsoft Windows 95 version 4.0
+-------------------------------------------------------------------------
+
+SUMMARY
+=======
+
+The processes for detecting program terminations in fall into two
+categories:
+
+ - Win32 processes use WaitForSingleObject() or WaitForMultipleObjects()
+   to wait for other Win32 processes, Windows 16-bit processes, and
+   MS-DOS-based applications to terminate.
+
+ - Windows 16-bit processes, on the other hand, must use the TOOLHELP
+   NotifyRegister() function. The 16-bit processes can be notified when
+   other 16-bit processes and MS-DOS-based applications exit, but have the
+   limitation of not being notified of Win32 process activity.
+
+
+MORE INFORMATION
+================
+
+Win32 processes can use WaitForSingleObject() or WaitForMultipleObjects()
+to wait for a spawned process. By using CreateProcess() to launch a Win32
+process, 16-bit process, or MS-DOS-based application, you can fill in a
+PROCESS_INFORMATION structure. The hProcess field of this structure can be
+used to wait until the spawned process terminates. For example, the
+following code spawns a process and waits for its termination:
+
+   STARTUPINFO StartupInfo = {0};
+
+   StartupInfo.cb = sizeof(STARTUPINFO);
+   if (CreateProcess(NULL, szCommandLine, NULL, NULL, FALSE,
+                     0, NULL, NULL, &StartupInfo, &ProcessInfo))
+   {
+       WaitForSingleObject(ProcessInfo.hProcess, INFINITE);
+       /* Process has terminated */
+       ...
+   }
+   else
+   {
+       /* Process could not be started */
+       ...
+   }
+
+If necessary, you can put this code into a separate thread to allow the
+initial thread to continue to execute.
+
+This synchronization method is not available to 16-bit processes. Instead,
+they must use the TOOLHELP NotifyRegister function to register a callback
+function to be called when a program terminates. This method will detect
+the termination of 16-bit processes and MS-DOS-based applications, but not
+Win32 processes.
+
+The following code shows how to register a callback function with
+NotifyRegister():
+
+   FARPROC lpfnCallback;
+
+   lpfnCallback = MakeProcInstance(NotifyRegisterCallback, ghInst);
+
+   if (!NotifyRegister(NULL, (LPFNNOTIFYCALLBACK)lpfnCallback,
+                       NF_NORMAL))
+   {
+      MessageBox(NULL, "NotifyRegister Failed", "Error", MB_OK);
+      FreeProcInstance(lpfnCallback);
+   }
+
+The next section of code demonstrates the implementation of the callback
+function:
+
+   BOOL FAR PASCAL __export NotifyRegisterCallback (WORD wID,
+                                                    DWORD dwData)
+   {
+      HTASK hTask;  // task that called the notification callback
+
+      TASKENTRY te;
+
+      // Check for task exiting
+      switch (wID)
+      {
+         case NFY_EXITTASK:
+            // Obtain info about the task that is terminating
+            hTask = GetCurrentTask();
+            te.dwSize = sizeof(TASKENTRY);
+            TaskFindHandle(&te, hTask);
+
+            // Check if the task that is terminating is our child task.
+            // Also check if the hInstance of the task that is
+            // terminating is the same as the hInstance of the task
+
+            // that was WinExec'd by us earlier in the program.
+
+            if (te.hTaskParent == ghtaskParent &&
+                te.hInst == ghInstChild)
+                PostMessage(ghwnd, WM_USER+509, (WORD)te.hInst, dwData);
+            break;
+
+         default:
+            break;
+      }
+      // Pass notification to other callback functions
+      return FALSE;
+   }
+
+The NotifyRegisterCallback() API is called by the 16-bit TOOLHELP DLL in
+the context of the process that is causing the event. Problems arising
+
+because of reentrancy and notification chaining makes the callback function
+subject to certain restrictions. For example, operations that cause
+TOOLHELP events cannot be done in the callback function. (See the TOOLHELP
+NotifyRegister function documentation in your Software Development Kit for
+events that cause TOOLHELP callbacks.)
+
+There is no way a 16-bit process can be notified when a Win32 process
+exits. However, a 16-bit process can use TaskFirst() and TaskNext() to
+
+periodically walk the task list to determine if a Win32 process is still
+executing. This technique also works for 16-bit processes and MS-DOS-based
+applications. For example, the following code shows how to check for the
+existence of a process:
+
+   BOOL StillExecuting(HINSTANCE hAppInstance)
+   {
+      TASKENTRY  te = {0};
+
+      te.dwSize = sizeof(te);
+      if (TaskFirst(&te))
+          do
+          {
+             if (te.hInstance == hAppInstance)
+                return TRUE;      // process found
+
+          } while (TaskNext(&te));
+
+      // process not found
+      return FALSE;
+   }
+
+Refer to the TermWait sample for complete details on how to use
+NotifyRegister and implement a callback function. For additional
+information, please search in the Microsoft Knowledge Base using this word:
+
+   TERMWAIT
+
+Additional reference words: 4.00 95  end exit notification notify spawn
+terminate termination
+KBCategory: kbprg kbcode
+KBSubcategory: BseProcThrd
